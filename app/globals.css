@@ -1,0 +1,33 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+body {
+  background: radial-gradient(circle at top, #181b24 0%, #07080a 45%, #050608 100%);
+  min-height: 100vh;
+}
+
+.options-card {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(20, 23, 30, 0.72);
+}
+
+.options-card.selected {
+  border-color: rgba(99, 102, 241, 0.7);
+  background: rgba(56, 64, 128, 0.35);
+}
+
+.options-card:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.panel {
+  background: linear-gradient(160deg, rgba(18, 21, 28, 0.9), rgba(11, 13, 17, 0.95));
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 16px;
+}
