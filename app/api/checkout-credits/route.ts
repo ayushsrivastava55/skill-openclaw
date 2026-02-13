@@ -1,51 +1,69 @@
 import { NextResponse } from "next/server";
+import { getAuthenticatedUser } from "@/lib/auth-server";
 import { env } from "@/lib/env";
+import { createRazorpayOrder, isRazorpayConfigured } from "@/lib/razorpay";
 import { creditCheckoutSchema } from "@/lib/schemas";
-import { makeId } from "@/lib/security";
-import { getStripe } from "@/lib/stripe";
-import { addCredits, getDeploymentById, saveCheckoutSession } from "@/lib/store";
+import { addCredits, getDeploymentById, getUserById, saveCheckoutSession } from "@/lib/store";
 
 export async function POST(request: Request) {
+  const authUser = await getAuthenticatedUser(request);
+  if (!authUser) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
   const parsed = creditCheckoutSchema.safeParse(await request.json());
   if (!parsed.success) {
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
   }
 
   const body = parsed.data;
-  const deployment = getDeploymentById(body.rowId);
+  const deployment = await getDeploymentById(body.rowId);
   if (!deployment) {
     return NextResponse.json({ error: "Deployment not found" }, { status: 404 });
   }
+  const owner = await getUserById(deployment.userId);
+  if (!owner || owner.email.toLowerCase().trim() !== authUser.email) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
 
-  const stripe = getStripe();
-  if (!stripe || !env.STRIPE_PRICE_CREDITS) {
-    addCredits(deployment.id, Math.floor(body.amount * 1000));
-    const url = `${env.NEXT_PUBLIC_APP_URL}/?credit_purchase=success`;
+  if (!isRazorpayConfigured()) {
+    await addCredits(deployment.id, Math.floor(body.amount * 1000));
+    const url = `${env.NEXT_PUBLIC_APP_URL}/checkout/success?type=credits&session_id=mock&deploymentId=${deployment.id}&captured=1`;
     return NextResponse.json({ url, mode: "mock" });
   }
 
-  const session = await stripe.checkout.sessions.create({
-    mode: "payment",
-    success_url: `${env.NEXT_PUBLIC_APP_URL}/?credit_purchase=success&session_id={CHECKOUT_SESSION_ID}`,
-    cancel_url: `${env.NEXT_PUBLIC_APP_URL}/?credit_purchase=cancelled`,
-    line_items: [
-      {
-        price: env.STRIPE_PRICE_CREDITS,
-        quantity: Math.max(1, Math.round(body.amount / 10))
+  try {
+    // We still store "credits" in USD terms internally, but charge INR for now.
+    const usdToInr = 85;
+    const amountInr = Math.round(body.amount * usdToInr);
+    const order = await createRazorpayOrder({
+      amount: amountInr * 100,
+      currency: (env.RAZORPAY_CURRENCY || "INR").toUpperCase(),
+      receipt: `credits_${deployment.id}_${Date.now()}`,
+      notes: {
+        deploymentId: deployment.id,
+        type: "credits",
+        amountUsd: body.amount.toFixed(2),
+        amountInr: String(amountInr)
       }
-    ],
-    metadata: {
+    });
+
+    await saveCheckoutSession(order.id, {
       deploymentId: deployment.id,
       type: "credits",
-      amountUsd: String(body.amount)
-    }
-  });
+      amount: body.amount
+    });
 
-  saveCheckoutSession(session.id, {
-    deploymentId: deployment.id,
-    type: "credits",
-    amount: body.amount
-  });
-
-  return NextResponse.json({ url: session.url ?? `${env.NEXT_PUBLIC_APP_URL}/?credit_purchase=success`, sessionId: session.id });
+    return NextResponse.json({
+      mode: "razorpay",
+      keyId: env.RAZORPAY_KEY_ID,
+      deploymentId: deployment.id,
+      orderId: order.id,
+      amount: order.amount,
+      currency: order.currency
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to create Razorpay order";
+    return NextResponse.json({ error: message }, { status: 502 });
+  }
 }

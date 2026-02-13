@@ -8,7 +8,7 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "rowId is required" }, { status: 400 });
   }
 
-  const usage = getUsage(rowId) ?? upsertUsage(rowId);
+  const usage = (await getUsage(rowId)) ?? (await upsertUsage(rowId));
   return NextResponse.json({
     data: {
       limit_total: usage.limitTotal,

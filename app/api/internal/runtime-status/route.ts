@@ -32,22 +32,22 @@ export async function POST(request: Request) {
   }
 
   const { deploymentId, status, message } = parsed.data;
-  const deployment = getDeploymentById(deploymentId);
+  const deployment = await getDeploymentById(deploymentId);
   if (!deployment) {
     return Response.json({ error: "Deployment not found" }, { status: 404 });
   }
 
   if (deployment.runtimeSlotId) {
     if (status === "setup_error" || status === "pairing_error") {
-      releaseWarmSlot(deployment.runtimeSlotId);
-      refillWarmPool();
+      await releaseWarmSlot(deployment.runtimeSlotId);
+      await refillWarmPool();
     }
     if (status === "telegram_pairing_complete") {
-      markSlotState(deployment.runtimeSlotId, "active");
-      refillWarmPool();
+      await markSlotState(deployment.runtimeSlotId, "active");
+      await refillWarmPool();
     }
   }
 
-  updateDeploymentStatus(deploymentId, status, message);
+  await updateDeploymentStatus(deploymentId, status, message);
   return Response.json({ ok: true });
 }

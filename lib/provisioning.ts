@@ -1,10 +1,12 @@
 import { env } from "@/lib/env";
+import { ensureProvisionedOpenRouterKey } from "@/lib/openrouter-provisioning";
 import { decrypt } from "@/lib/security";
 import { dispatchRuntimeDeployment } from "@/lib/runtime-executor";
 import {
   addCredits,
   getCheckoutSession,
   getDeploymentById,
+  getOpenRouterKeyByDeploymentId,
   markSlotState,
   queueDeploymentJob,
   releaseWarmSlot,
@@ -13,57 +15,123 @@ import {
   updateDeploymentStatus
 } from "@/lib/store";
 
-export function onCheckoutCompleted(sessionId: string) {
-  const checkout = getCheckoutSession(sessionId);
+export async function onCheckoutCompleted(sessionId: string) {
+  const checkout = await getCheckoutSession(sessionId);
   if (!checkout) {
     return { ok: false, reason: "Checkout session not found" };
   }
 
   if (checkout.type === "credits") {
-    addCredits(checkout.deploymentId, Math.floor((checkout.amount ?? 10) * 1000));
+    await addCredits(checkout.deploymentId, Math.floor((checkout.amount ?? 10) * 1000));
     return { ok: true };
   }
 
-  queueDeploymentJob(checkout.deploymentId, sessionId);
-  setTimeout(() => {
-    void processDeploymentJob(checkout.deploymentId).catch(() => {
-      // Worker handles retries in production.
-    });
-  }, 500);
+  startDeploymentAfterPayment(checkout.deploymentId, sessionId);
   return { ok: true };
 }
 
+export function startDeploymentAfterPayment(deploymentId: string, paymentReference?: string) {
+  void queueDeploymentJob(deploymentId, paymentReference ?? `direct_${deploymentId}`);
+  void processDeploymentJob(deploymentId).catch((error) => {
+    const message = error instanceof Error ? error.message : "Unknown provisioning error";
+    void updateDeploymentStatus(deploymentId, "setup_error", `Provisioning failed: ${message}`);
+  });
+}
+
 export async function processDeploymentJob(deploymentId: string) {
-  const deployment = getDeploymentById(deploymentId);
+  let deployment = await getDeploymentById(deploymentId);
   if (!deployment) {
     throw new Error("Deployment not found for provisioning");
   }
 
-  const slot = reserveWarmSlot(deployment.id);
+  if (deployment.subscriptionId && deployment.subscriptionStatus !== "active") {
+    await updateDeploymentStatus(
+      deployment.id,
+      "setup_error",
+      "Subscription not active. Please re-subscribe to provision your bot."
+    );
+    return;
+  }
+
+  // Pro plan: create an isolated OpenRouter key so we can track credits per-user.
+  // Do this before dispatching the runtime so the bot uses the provisioned key from the start.
+  if (deployment.plan === "pro" && !deployment.encryptedModelApiKey) {
+    await updateDeploymentStatus(deployment.id, "setup_started", "Provisioning OpenRouter credits key...");
+    await ensureProvisionedOpenRouterKey(deployment);
+    const refreshed = await getDeploymentById(deploymentId);
+    if (refreshed) deployment = refreshed;
+  }
+
+  const slot = await reserveWarmSlot(deployment.id);
   if (!slot) {
-    updateDeploymentStatus(
+    await updateDeploymentStatus(
       deployment.id,
       "setup_error",
       "Warm pool empty. Please retry shortly while slots are refilling."
     );
-    refillWarmPool();
+    await refillWarmPool();
     return;
   }
 
-  markSlotState(slot.id, "configuring");
-  updateDeploymentStatus(deployment.id, "setup_started", "Claimed warm runtime slot.");
+  await markSlotState(slot.id, "configuring");
+  await updateDeploymentStatus(deployment.id, "setup_started", "Claimed warm runtime slot.");
 
-  const modelKey = deployment.encryptedModelApiKey
-    ? decrypt(deployment.encryptedModelApiKey)
-    : env.PLATFORM_OPENROUTER_API_KEY;
-
-  if (!modelKey) {
-    releaseWarmSlot(slot.id);
-    updateDeploymentStatus(
+  const modelProvider = (deployment.modelProvider ?? "openrouter") as
+    | "openrouter"
+    | "openai"
+    | "moonshot"
+    | "nvidia";
+  let encryptedModelKey = deployment.encryptedModelApiKey;
+  if (!encryptedModelKey && deployment.plan === "pro") {
+    const openrouter = await getOpenRouterKeyByDeploymentId(deployment.id);
+    encryptedModelKey = openrouter?.encryptedKey ?? null;
+  }
+  if (deployment.plan === "pro" && !encryptedModelKey) {
+    await releaseWarmSlot(slot.id);
+    await updateDeploymentStatus(
       deployment.id,
       "setup_error",
-      "No model API key available. Add platform key or provide user key."
+      "Could not provision OpenRouter credits for Pro. Please retry or contact support."
     );
+    return;
+  }
+
+  // Key selection:
+  // - Starter: always BYOK (key is encryptedModelApiKey) and depends on provider.
+  // - Pro: OpenRouter key is provisioned and stored in openrouterKeys.
+  let modelKey: string | null = encryptedModelKey ? decrypt(encryptedModelKey) : null;
+  if (!modelKey && modelProvider === "openrouter") {
+    modelKey = env.PLATFORM_OPENROUTER_API_KEY ?? null;
+  }
+
+  if (!modelKey) {
+    await releaseWarmSlot(slot.id);
+    await updateDeploymentStatus(
+      deployment.id,
+      "setup_error",
+      modelProvider === "openai"
+        ? "No OpenAI API key available. Please add your OpenAI key and retry."
+        : modelProvider === "moonshot"
+          ? "No Moonshot API key available. Please add your Moonshot key and retry."
+          : "No model API key available. Add platform key or provide user key."
+    );
+    return;
+  }
+
+  if (
+    deployment.plan === "starter" &&
+    modelProvider !== "openrouter" &&
+    modelProvider !== "openai" &&
+    modelProvider !== "moonshot" &&
+    modelProvider !== "nvidia"
+  ) {
+    await releaseWarmSlot(slot.id);
+    await updateDeploymentStatus(deployment.id, "setup_error", "Unsupported model provider selected.");
+    return;
+  }
+  if (deployment.plan === "starter" && modelProvider !== "openrouter" && !deployment.encryptedModelApiKey) {
+    await releaseWarmSlot(slot.id);
+    await updateDeploymentStatus(deployment.id, "setup_error", "Starter requires your API key.");
     return;
   }
 
@@ -71,42 +139,46 @@ export async function processDeploymentJob(deploymentId: string) {
     deploymentId: deployment.id,
     userId: deployment.userId,
     slotId: slot.id,
+    provider: modelProvider,
     model: deployment.selectedModel,
     channel: deployment.channel,
-    telegramToken: decrypt(deployment.encryptedTelegramToken),
+    channelPrimaryToken: decrypt(deployment.encryptedChannelPrimaryToken),
+    channelSecondaryToken: deployment.encryptedChannelSecondaryToken
+      ? decrypt(deployment.encryptedChannelSecondaryToken)
+      : undefined,
     modelApiKey: modelKey
   });
 
   if (!dispatch.accepted) {
-    releaseWarmSlot(slot.id);
-    updateDeploymentStatus(
+    await releaseWarmSlot(slot.id);
+    await updateDeploymentStatus(
       deployment.id,
       "setup_error",
       `Runtime dispatch failed: ${dispatch.reason}`
     );
-    refillWarmPool();
+    await refillWarmPool();
     return;
   }
 
   if (env.EXECUTION_MODE === "mock") {
-    updateDeploymentStatus(deployment.id, "setup_complete", "Mock runtime started in warm slot.");
-    updateDeploymentStatus(
+    await updateDeploymentStatus(deployment.id, "setup_complete", "Mock runtime started in warm slot.");
+    await updateDeploymentStatus(
       deployment.id,
       "telegram_pairing_started",
-      "Open Telegram and send first message to your bot."
+      "Send the first message in your selected channel."
     );
 
-    markSlotState(slot.id, "active");
-    updateDeploymentStatus(
+    await markSlotState(slot.id, "active");
+    await updateDeploymentStatus(
       deployment.id,
       "telegram_pairing_complete",
       `Mock deployment ready (${dispatch.jobId}).`
     );
-    refillWarmPool();
+    await refillWarmPool();
     return;
   }
 
-  updateDeploymentStatus(
+  await updateDeploymentStatus(
     deployment.id,
     "setup_started",
     `Runtime accepted by remote controller. Job: ${dispatch.jobId}`

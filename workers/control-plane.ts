@@ -4,7 +4,7 @@ import { processDeploymentJob } from "../lib/provisioning";
 const POLL_MS = 1000;
 
 async function tick() {
-  const job = popNextJob();
+  const job = await popNextJob();
   if (!job) {
     return;
   }

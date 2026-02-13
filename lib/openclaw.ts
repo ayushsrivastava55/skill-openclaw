@@ -2,13 +2,14 @@ import { decrypt } from "@/lib/security";
 import type { DeploymentRecord } from "@/lib/types";
 
 export function buildOnboardCommand(deployment: DeploymentRecord, modelKey: string) {
-  const telegramToken = decrypt(deployment.encryptedTelegramToken);
+  const primaryToken = decrypt(deployment.encryptedChannelPrimaryToken);
   return [
     "npx openclaw@latest onboard",
     "--provider openrouter",
     `--model ${deployment.selectedModel}`,
     `--api-key ${modelKey}`,
-    `--telegram ${telegramToken}`,
+    `--channel ${deployment.channel}`,
+    `--token ${primaryToken}`,
     "--dm-policy pairing"
   ].join(" ");
 }

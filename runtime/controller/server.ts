@@ -4,17 +4,29 @@ import { spawn } from "node:child_process";
 
 type DeployPayload = {
   deploymentId: string;
+  provider?: string;
   model: string;
   modelApiKey: string;
-  telegramToken: string;
+  channel: "telegram" | "discord" | "slack";
+  channelPrimaryToken: string;
+  channelSecondaryToken?: string;
+  gatewayToken?: string;
   runtimeImage?: string;
   callbackUrl?: string;
   callbackToken?: string;
 };
 
+type ChatPayload = {
+  deploymentId: string;
+  channel: "telegram" | "discord" | "slack";
+  sessionId: string;
+  message: string;
+};
+
 const port = Number(process.env.PORT ?? "8088");
 const token = process.env.CONTROLLER_TOKEN;
 const defaultImage = process.env.DEFAULT_RUNTIME_IMAGE ?? "ghcr.io/openclaw/openclaw:latest";
+const warmPoolSize = Number(process.env.CONTROLLER_WARM_POOL_SIZE ?? "2");
 
 if (!token) {
   // eslint-disable-next-line no-console
@@ -63,6 +75,81 @@ function sanitizeContainerName(deploymentId: string) {
   return `claw-${safe || "runtime"}`;
 }
 
+async function listWarmContainers() {
+  const result = await run("docker", [
+    "ps",
+    "-a",
+    "--filter",
+    "name=^claw-warm-",
+    "--format",
+    "{{.Names}}"
+  ]);
+  if (result.code !== 0) {
+    return [];
+  }
+  return result.stdout
+    .split("\n")
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .sort();
+}
+
+async function ensureWarmContainer(containerName: string, image: string) {
+  await run("docker", ["rm", "-f", containerName]);
+  return run("docker", [
+    "run",
+    "-d",
+    "--name",
+    containerName,
+    "--restart",
+    "unless-stopped",
+    "--label",
+    "simpleclaw.role=warm",
+    "--entrypoint",
+    "sh",
+    image,
+    "-lc",
+    "sleep infinity"
+  ]);
+}
+
+async function reconcileWarmPool() {
+  if (!Number.isFinite(warmPoolSize) || warmPoolSize <= 0) {
+    return;
+  }
+
+  const image = defaultImage;
+  const existing = await listWarmContainers();
+
+  // Remove overflow warm containers first.
+  if (existing.length > warmPoolSize) {
+    for (const name of existing.slice(warmPoolSize)) {
+      await run("docker", ["rm", "-f", name]);
+    }
+  }
+
+  for (let i = 1; i <= warmPoolSize; i += 1) {
+    const name = `claw-warm-${i}`;
+    const check = await run("docker", ["ps", "--filter", `name=^${name}$`, "--format", "{{.Names}}"]);
+    if (check.code === 0 && check.stdout.trim() === name) {
+      continue;
+    }
+    const created = await ensureWarmContainer(name, image);
+    if (created.code !== 0) {
+      // eslint-disable-next-line no-console
+      console.error(`[runtime-controller] warm pool failed for ${name}: ${created.stderr}`);
+    }
+  }
+}
+
+function resolveGatewayToken(payload: DeployPayload) {
+  const fromPayload = payload.gatewayToken?.trim();
+  if (fromPayload) {
+    return fromPayload;
+  }
+  return randomUUID().replace(/-/g, "");
+}
+
 async function postStatus(payload: DeployPayload, status: string, message: string) {
   if (!payload.callbackUrl || !payload.callbackToken) {
     return;
@@ -84,13 +171,24 @@ async function postStatus(payload: DeployPayload, status: string, message: strin
 }
 
 async function handleDeploy(payload: DeployPayload) {
-  const required = [payload.deploymentId, payload.model, payload.modelApiKey, payload.telegramToken];
+  const required = [
+    payload.deploymentId,
+    payload.provider ?? "openrouter",
+    payload.model,
+    payload.modelApiKey,
+    payload.channel,
+    payload.channelPrimaryToken
+  ];
   if (required.some((value) => !value || value.trim().length === 0)) {
     return { ok: false, error: "Missing required deployment fields" };
+  }
+  if (payload.channel === "slack" && !payload.channelSecondaryToken?.trim()) {
+    return { ok: false, error: "Missing required deployment fields: channelSecondaryToken" };
   }
 
   const image = payload.runtimeImage?.trim() || defaultImage;
   const containerName = sanitizeContainerName(payload.deploymentId);
+  const gatewayToken = resolveGatewayToken(payload);
 
   await postStatus(payload, "setup_started", "Remote controller received deploy request.");
 
@@ -104,19 +202,27 @@ async function handleDeploy(payload: DeployPayload) {
     "--restart",
     "unless-stopped",
     "-e",
+    `OPENCLAW_PROVIDER=${payload.provider ?? "openrouter"}`,
+    "-e",
     `OPENCLAW_MODEL=${payload.model}`,
     "-e",
     `OPENCLAW_API_KEY=${payload.modelApiKey}`,
     "-e",
-    `TELEGRAM_BOT_TOKEN=${payload.telegramToken}`,
+    `OPENCLAW_CHANNEL=${payload.channel}`,
     "-e",
-    "OPENCLAW_DM_POLICY=pairing",
+    `OPENCLAW_CHANNEL_PRIMARY_TOKEN=${payload.channelPrimaryToken}`,
+    "-e",
+    `OPENCLAW_CHANNEL_SECONDARY_TOKEN=${payload.channelSecondaryToken ?? ""}`,
+    "-e",
+    "OPENCLAW_DM_POLICY=open",
     "-e",
     `DEPLOYMENT_ID=${payload.deploymentId}`,
     "-e",
     `RUNTIME_CALLBACK_URL=${payload.callbackUrl ?? ""}`,
     "-e",
     `RUNTIME_CALLBACK_TOKEN=${payload.callbackToken ?? ""}`,
+    "-e",
+    `OPENCLAW_GATEWAY_TOKEN=${gatewayToken}`,
     image
   ]);
 
@@ -127,6 +233,80 @@ async function handleDeploy(payload: DeployPayload) {
 
   const jobId = randomUUID();
   return { ok: true, jobId, containerName, containerId: runResult.stdout.trim() };
+}
+
+function parseAgentJson(stdout: string) {
+  const start = stdout.indexOf("{");
+  const end = stdout.lastIndexOf("}");
+  if (start < 0 || end <= start) {
+    return null;
+  }
+  try {
+    return JSON.parse(stdout.slice(start, end + 1)) as {
+      result?: {
+        payloads?: Array<{ text?: string | null }>;
+      };
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function handleChat(payload: ChatPayload) {
+  if (!payload.deploymentId?.trim() || !payload.sessionId?.trim() || !payload.message?.trim()) {
+    return { ok: false, error: "Missing required chat fields" };
+  }
+
+  const containerName = sanitizeContainerName(payload.deploymentId);
+  const execResult = await run("docker", [
+    "exec",
+    "-e",
+    "OPENCLAW_CONFIG_PATH=/tmp/openclaw/openclaw.json",
+    "-e",
+    "OPENCLAW_STATE_DIR=/tmp/openclaw",
+    containerName,
+    "openclaw",
+    "agent",
+    "--message",
+    payload.message.trim(),
+    "--session-id",
+    payload.sessionId.trim(),
+    "--channel",
+    payload.channel,
+    "--json"
+  ]);
+
+  if (execResult.code !== 0) {
+    return { ok: false, error: "Runtime chat execution failed", details: execResult.stderr };
+  }
+
+  const parsed = parseAgentJson(execResult.stdout);
+  if (!parsed) {
+    return { ok: false, error: "Runtime returned invalid chat payload" };
+  }
+
+  const text = (parsed.result?.payloads ?? [])
+    .map((payloadItem) => payloadItem.text?.trim() ?? "")
+    .filter(Boolean)
+    .join("\n\n");
+
+  return {
+    ok: true,
+    reply: text || "No response returned.",
+    sessionId: payload.sessionId.trim()
+  };
+}
+
+async function handleStop(deploymentId: string) {
+  if (!deploymentId?.trim()) {
+    return { ok: false, error: "Missing deploymentId" };
+  }
+  const containerName = sanitizeContainerName(deploymentId);
+  const result = await run("docker", ["rm", "-f", containerName]);
+  if (result.code !== 0) {
+    return { ok: false, error: result.stderr || "Failed to stop container" };
+  }
+  return { ok: true };
 }
 
 const server = createServer(async (req, res) => {
@@ -155,10 +335,62 @@ const server = createServer(async (req, res) => {
     return json(res, 200, { ok: true });
   }
 
+  if (req.method === "POST" && req.url === "/chat") {
+    const auth = req.headers.authorization;
+    if (auth !== `Bearer ${token}`) {
+      return json(res, 401, { error: "Unauthorized" });
+    }
+
+    try {
+      const body = await readBody(req);
+      const payload = JSON.parse(body) as ChatPayload;
+      const result = await handleChat(payload);
+      if (!result.ok) {
+        return json(res, 400, result);
+      }
+      return json(res, 200, result);
+    } catch (error) {
+      return json(res, 500, {
+        error: error instanceof Error ? error.message : "Unknown error"
+      });
+    }
+  }
+
+  if (req.method === "POST" && req.url === "/stop") {
+    const auth = req.headers.authorization;
+    if (auth !== `Bearer ${token}`) {
+      return json(res, 401, { error: "Unauthorized" });
+    }
+
+    try {
+      const body = await readBody(req);
+      const payload = JSON.parse(body) as { deploymentId?: string };
+      const result = await handleStop(payload.deploymentId ?? "");
+      if (!result.ok) {
+        return json(res, 400, result);
+      }
+      return json(res, 200, result);
+    } catch (error) {
+      return json(res, 500, {
+        error: error instanceof Error ? error.message : "Unknown error"
+      });
+    }
+  }
+
   return json(res, 404, { error: "Not found" });
 });
 
 server.listen(port, () => {
   // eslint-disable-next-line no-console
   console.log(`[runtime-controller] listening on :${port}`);
+  void reconcileWarmPool().catch((error) => {
+    // eslint-disable-next-line no-console
+    console.error(
+      `[runtime-controller] warm pool init failed: ${error instanceof Error ? error.message : "unknown"}`
+    );
+  });
+
+  setInterval(() => {
+    void reconcileWarmPool().catch(() => {});
+  }, 30_000);
 });

@@ -1,6 +1,22 @@
 import { cert, getApps, initializeApp } from "firebase-admin/app";
 
 function parseServiceAccount() {
+  const projectId = process.env.FIREBASE_PROJECT_ID?.trim();
+  const clientEmail = process.env.FIREBASE_CLIENT_EMAIL?.trim();
+  const privateKey = process.env.FIREBASE_PRIVATE_KEY?.trim();
+  const privateKeyBase64 = process.env.FIREBASE_PRIVATE_KEY_BASE64?.trim();
+
+  if (projectId && clientEmail && (privateKey || privateKeyBase64)) {
+    const rawKey = privateKeyBase64
+      ? Buffer.from(privateKeyBase64, "base64").toString("utf8")
+      : privateKey ?? "";
+    return {
+      projectId,
+      clientEmail,
+      privateKey: rawKey.replace(/\\n/g, "\n")
+    };
+  }
+
   const raw = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
   if (!raw) {
     return null;

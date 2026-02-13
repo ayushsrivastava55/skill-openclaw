@@ -1,7 +1,10 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  typedRoutes: true
+  typedRoutes: true,
+  experimental: {
+    webpackBuildWorker: false
+  }
 };
 
 export default nextConfig;

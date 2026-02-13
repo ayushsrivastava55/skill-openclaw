@@ -1,4 +1,4 @@
-import { getLatestEvent, subscribeDeployment } from "@/lib/store";
+import { getDeploymentById, getLatestEvent, getLatestPersistedEvent, subscribeDeployment } from "@/lib/store";
 
 export const runtime = "nodejs";
 
@@ -11,34 +11,91 @@ export async function GET(request: Request) {
   }
 
   const stream = new ReadableStream({
-    start(controller) {
+    async start(controller) {
       const encoder = new TextEncoder();
       const send = (data: unknown) => {
         controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
       };
 
-      const latest = getLatestEvent(rowId);
-      if (latest) {
-        send({
-          deployment_status: latest.status,
-          message: latest.message,
-          createdAt: latest.createdAt
-        });
-      }
+      let lastSentKey = "";
 
-      const unsubscribe = subscribeDeployment(rowId, (event) => {
+      const sendEvent = (event: { status?: string; message?: string; createdAt?: string; id?: string }) => {
+        const key = `${event.id ?? ""}:${event.status ?? ""}:${event.createdAt ?? ""}:${event.message ?? ""}`;
+        if (key && key === lastSentKey) {
+          return;
+        }
+        if (key) {
+          lastSentKey = key;
+        }
         send({
           deployment_status: event.status,
           message: event.message,
           createdAt: event.createdAt
         });
+      };
+
+      // Best-effort initial snapshot: in-memory first, then persisted latest event, then deployment doc.
+      try {
+        const deployment = await getDeploymentById(rowId);
+        if (deployment) {
+          const deploymentMs = Date.parse(deployment.updatedAt ?? deployment.createdAt);
+          // Always emit the current deployment doc status first (source of truth).
+          sendEvent({ id: deployment.id, status: deployment.status, createdAt: deployment.updatedAt ?? deployment.createdAt });
+
+          // Then, if the latest event matches that status, emit its message for richer UX.
+          const latestDb = await getLatestPersistedEvent(rowId);
+          if (latestDb && latestDb.status === deployment.status) {
+            const eventMs = Date.parse(latestDb.createdAt);
+            // Avoid showing stale messages from a previous run.
+            if (Number.isFinite(deploymentMs) && Number.isFinite(eventMs) && eventMs >= deploymentMs - 10_000) {
+              sendEvent({ id: latestDb.id, status: latestDb.status, message: latestDb.message, createdAt: latestDb.createdAt });
+            }
+          }
+        } else {
+          const latestMem = getLatestEvent(rowId);
+          if (latestMem) {
+            sendEvent({ id: latestMem.id, status: latestMem.status, message: latestMem.message, createdAt: latestMem.createdAt });
+          }
+        }
+      } catch {
+        const latestMem = getLatestEvent(rowId);
+        if (latestMem) {
+          sendEvent({ id: latestMem.id, status: latestMem.status, message: latestMem.message, createdAt: latestMem.createdAt });
+        }
+      }
+
+      const unsubscribe = subscribeDeployment(rowId, (event) => {
+        sendEvent({ id: event.id, status: event.status, message: event.message, createdAt: event.createdAt });
       });
+
+      // Poll Firestore for persisted status/events to survive app restarts and multi-instance deployments.
+      const poll = setInterval(async () => {
+        try {
+          const deployment = await getDeploymentById(rowId);
+          if (deployment) {
+            const deploymentMs = Date.parse(deployment.updatedAt ?? deployment.createdAt);
+            sendEvent({ id: deployment.id, status: deployment.status, createdAt: deployment.updatedAt ?? deployment.createdAt });
+
+            const latestDb = await getLatestPersistedEvent(rowId);
+            if (latestDb && latestDb.status === deployment.status) {
+              const eventMs = Date.parse(latestDb.createdAt);
+              if (Number.isFinite(deploymentMs) && Number.isFinite(eventMs) && eventMs >= deploymentMs - 10_000) {
+                sendEvent({ id: latestDb.id, status: latestDb.status, message: latestDb.message, createdAt: latestDb.createdAt });
+              }
+            }
+            return;
+          }
+        } catch {
+          // ignore
+        }
+      }, 2000);
 
       const heartbeat = setInterval(() => {
         controller.enqueue(encoder.encode(": heartbeat\n\n"));
       }, 15000);
 
       request.signal.addEventListener("abort", () => {
+        clearInterval(poll);
         clearInterval(heartbeat);
         unsubscribe();
         controller.close();
