@@ -1,6 +1,8 @@
 import { createServer, IncomingMessage, ServerResponse } from "node:http";
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
+import { writeFileSync, mkdirSync, rmSync } from "node:fs";
+import { join } from "node:path";
 
 type DeployPayload = {
   deploymentId: string;
@@ -14,6 +16,12 @@ type DeployPayload = {
   runtimeImage?: string;
   callbackUrl?: string;
   callbackToken?: string;
+  brandConfig?: {
+    skillContent: string;
+    skillFileName: string;
+    heartbeatContent: string;
+    heartbeatFileName: string;
+  };
 };
 
 type ChatPayload = {
@@ -194,7 +202,7 @@ async function handleDeploy(payload: DeployPayload) {
 
   await run("docker", ["rm", "-f", containerName]);
 
-  const runResult = await run("docker", [
+  const dockerArgs = [
     "run",
     "-d",
     "--name",
@@ -223,8 +231,37 @@ async function handleDeploy(payload: DeployPayload) {
     `RUNTIME_CALLBACK_TOKEN=${payload.callbackToken ?? ""}`,
     "-e",
     `OPENCLAW_GATEWAY_TOKEN=${gatewayToken}`,
-    image
-  ]);
+  ];
+
+  let tempDir = "";
+  if (payload.brandConfig) {
+    try {
+      tempDir = join("/tmp", `brand-deploy-${payload.deploymentId}-${randomUUID().slice(0, 8)}`);
+      mkdirSync(tempDir, { recursive: true });
+
+      const skillPath = join(tempDir, "skills", payload.brandConfig.skillFileName);
+      mkdirSync(join(tempDir, "skills"), { recursive: true });
+      writeFileSync(skillPath, payload.brandConfig.skillContent);
+
+      const heartbeatPath = join(tempDir, payload.brandConfig.heartbeatFileName);
+      writeFileSync(heartbeatPath, payload.brandConfig.heartbeatContent);
+
+      dockerArgs.push("-v", `${tempDir}/skills:/home/node/openclaw/workspace/skills:ro`);
+      dockerArgs.push("-v", `${tempDir}/${payload.brandConfig.heartbeatFileName}:/home/node/openclaw/workspace/HEARTBEAT.md:ro`);
+    } catch (err) {
+      console.error("[runtime-controller] Failed to create brand config files:", err);
+    }
+  }
+
+  dockerArgs.push(image);
+
+  const runResult = await run("docker", dockerArgs);
+
+  if (tempDir) {
+    try {
+      rmSync(tempDir, { recursive: true, force: true });
+    } catch {}
+  }
 
   if (runResult.code !== 0) {
     await postStatus(payload, "setup_error", `Failed to run runtime container: ${runResult.stderr}`);

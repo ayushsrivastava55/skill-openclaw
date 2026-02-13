@@ -12,6 +12,12 @@ export type RuntimeDispatchInput = {
   channelPrimaryToken: string;
   channelSecondaryToken?: string;
   modelApiKey: string;
+  brandConfig?: {
+    skillContent: string;
+    skillFileName: string;
+    heartbeatContent: string;
+    heartbeatFileName: string;
+  };
 };
 
 export type RuntimeDispatchResult =
