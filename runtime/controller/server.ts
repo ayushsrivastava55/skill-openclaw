@@ -83,6 +83,14 @@ function sanitizeContainerName(deploymentId: string) {
   return `claw-${safe || "runtime"}`;
 }
 
+function sanitizeFileName(fileName: string): string {
+  return fileName.replace(/[^a-zA-Z0-9_.-]/g, "").slice(0, 64);
+}
+
+function sanitizePathSegment(value: string): string {
+  return value.replace(/[^a-zA-Z0-9_.-]/g, "").slice(0, 80);
+}
+
 async function listWarmContainers() {
   const result = await run("docker", [
     "ps",
@@ -236,32 +244,34 @@ async function handleDeploy(payload: DeployPayload) {
   let tempDir = "";
   if (payload.brandConfig) {
     try {
-      tempDir = join("/tmp", `brand-deploy-${payload.deploymentId}-${randomUUID().slice(0, 8)}`);
+      const safeSkillFileName = sanitizeFileName(payload.brandConfig.skillFileName) || "brand-skill.md";
+      const safeHeartbeatFileName = sanitizeFileName(payload.brandConfig.heartbeatFileName) || "HEARTBEAT.md";
+      const safeDeploymentDir = sanitizePathSegment(payload.deploymentId) || randomUUID().slice(0, 12);
+
+      // Keep per-deployment brand files on host so container restarts keep working.
+      tempDir = join("/tmp", "brand-deploy", safeDeploymentDir);
+      rmSync(tempDir, { recursive: true, force: true });
       mkdirSync(tempDir, { recursive: true });
 
-      const skillPath = join(tempDir, "skills", payload.brandConfig.skillFileName);
+      const skillPath = join(tempDir, "skills", safeSkillFileName);
       mkdirSync(join(tempDir, "skills"), { recursive: true });
       writeFileSync(skillPath, payload.brandConfig.skillContent);
 
-      const heartbeatPath = join(tempDir, payload.brandConfig.heartbeatFileName);
+      const heartbeatPath = join(tempDir, safeHeartbeatFileName);
       writeFileSync(heartbeatPath, payload.brandConfig.heartbeatContent);
 
-      dockerArgs.push("-v", `${tempDir}/skills:/home/node/openclaw/workspace/skills:ro`);
-      dockerArgs.push("-v", `${tempDir}/${payload.brandConfig.heartbeatFileName}:/home/node/openclaw/workspace/HEARTBEAT.md:ro`);
+      dockerArgs.push("-v", `${tempDir}/skills:/root/.openclaw/workspace/skills:ro`);
+      dockerArgs.push("-v", `${tempDir}/${safeHeartbeatFileName}:/root/.openclaw/workspace/HEARTBEAT.md:ro`);
     } catch (err) {
       console.error("[runtime-controller] Failed to create brand config files:", err);
+      await postStatus(payload, "setup_error", "Failed to stage brand SKILL.md/HEARTBEAT.md files.");
+      return { ok: false, error: "Failed to stage brand files for runtime deployment" };
     }
   }
 
   dockerArgs.push(image);
 
   const runResult = await run("docker", dockerArgs);
-
-  if (tempDir) {
-    try {
-      rmSync(tempDir, { recursive: true, force: true });
-    } catch {}
-  }
 
   if (runResult.code !== 0) {
     await postStatus(payload, "setup_error", `Failed to run runtime container: ${runResult.stderr}`);

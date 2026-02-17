@@ -47,7 +47,7 @@ async function callAI(prompt: string): Promise<string> {
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: "anthropic/claude-sonnet-4-20250514",
+      model: "openrouter/aurora-alpha",
       messages: [
         { role: "system", content: HEARTBEAT_SYSTEM_PROMPT },
         { role: "user", content: prompt },

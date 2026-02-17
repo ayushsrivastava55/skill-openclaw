@@ -10,7 +10,7 @@ export async function createBrandDeploymentConfig(
   let skill: GeneratedSkill;
   let heartbeat: GeneratedHeartbeat;
 
-  if (useAI && brand.website && brand.website.startsWith("http")) {
+  if (useAI) {
     try {
       skill = await createBrandSkill(brand);
     } catch (error) {
@@ -83,7 +83,7 @@ export interface DeploymentWithBrandConfig {
 export function prepareBrandFilesForDeployment(
   deploymentId: string,
   config: BrandDeploymentConfig
-): DeploymentWithBrandFiles {
+): DeploymentWithBrandConfig {
   const skillContent = formatSkillForDeployment(config.skill);
   const heartbeatContent = config.heartbeat.heartbeatMd;
 
@@ -95,11 +95,3 @@ export function prepareBrandFilesForDeployment(
     heartbeatFileName: "HEARTBEAT.md",
   };
 }
-
-export type DeploymentWithBrandFiles = {
-  deploymentId: string;
-  skillContent: string;
-  skillFileName: string;
-  heartbeatContent: string;
-  heartbeatFileName: string;
-};
