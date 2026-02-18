@@ -125,6 +125,8 @@ async function main() {
     "processedGumroadSales",
     "processedDodoEvents",
     "openrouterKeys",
+    "xConnections",
+    "xOAuthStates",
     "config"
   ];
 

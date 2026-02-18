@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
+import { getFirebaseIdToken } from "@/lib/firebase-client";
 
 type ModelProviderId = "openrouter" | "openai" | "moonshot" | "nvidia";
 
@@ -120,6 +121,7 @@ export default function HomePage() {
   const [latestMessage, setLatestMessage] = useState("");
   const [statusEvents, setStatusEvents] = useState<StatusEvent[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isConnectingX, setIsConnectingX] = useState(false);
 
   useEffect(() => {
     const stored = readStoredDeploymentId();
@@ -128,7 +130,7 @@ export default function HomePage() {
     }
   }, []);
 
-  useEffect(() {
+  useEffect(() => {
     if (!deploymentId || typeof window === "undefined") return;
     window.localStorage.setItem("brand_deployment_id", deploymentId);
   }, [deploymentId]);
@@ -262,6 +264,48 @@ export default function HomePage() {
       toast.error(error instanceof Error ? error.message : "Deployment failed");
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  const handleConnectX = async () => {
+    const targetDeploymentId = (deploymentId || redeployId).trim();
+    if (!targetDeploymentId) {
+      toast.error("Deploy first (or provide redeploy ID) before connecting X.");
+      return;
+    }
+
+    setIsConnectingX(true);
+    try {
+      const idToken = await getFirebaseIdToken();
+      if (!idToken) {
+        throw new Error("Sign in is required to connect X account.");
+      }
+
+      const response = await fetch("/api/x/connect", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${idToken}`
+        },
+        body: JSON.stringify({
+          deploymentId: targetDeploymentId
+        })
+      });
+
+      const payload = (await response.json().catch(() => ({}))) as {
+        authorizeUrl?: string;
+        error?: string;
+      };
+
+      if (!response.ok || !payload.authorizeUrl) {
+        throw new Error(payload.error ?? "Failed to initialize X OAuth");
+      }
+
+      window.location.href = payload.authorizeUrl;
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to connect X account");
+    } finally {
+      setIsConnectingX(false);
     }
   };
 
@@ -473,6 +517,15 @@ export default function HomePage() {
           className="button-glow mt-2 rounded-lg px-4 py-3 disabled:cursor-not-allowed disabled:opacity-60"
         >
           {isSubmitting ? "Deploying..." : "Generate files and deploy bot"}
+        </button>
+
+        <button
+          type="button"
+          onClick={handleConnectX}
+          disabled={isConnectingX}
+          className="mt-2 rounded-lg border border-white/20 bg-black/30 px-4 py-3 text-left text-sm text-white disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {isConnectingX ? "Redirecting to X OAuth..." : "Connect X account for auto-posting/replies"}
         </button>
       </form>
 

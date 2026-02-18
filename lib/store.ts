@@ -11,7 +11,9 @@ import type {
   DeploymentStatus,
   UsageRecord,
   UserRecord,
-  WarmSlot
+  WarmSlot,
+  XConnectionRecord,
+  XOAuthStateRecord
 } from "@/lib/types";
 
 type CheckoutSession = { deploymentId: string; type: "deploy" | "credits"; amount?: number };
@@ -64,6 +66,8 @@ const processedRazorpayCol = db.collection("processedRazorpayPayments");
 const processedGumroadCol = db.collection("processedGumroadSales");
 const processedDodoCol = db.collection("processedDodoEvents");
 const openrouterKeysCol = db.collection("openrouterKeys");
+const xConnectionsCol = db.collection("xConnections");
+const xOAuthStatesCol = db.collection("xOAuthStates");
 
 function normalizeEmail(email: string) {
   return email.toLowerCase().trim();
@@ -549,6 +553,86 @@ export async function getOpenRouterKeyByDeploymentId(deploymentId: string): Prom
     limitUsd?: number | null;
     limitRemaining?: number | null;
   };
+}
+
+export async function saveXConnection(
+  input: Omit<XConnectionRecord, "createdAt" | "updatedAt"> & { createdAt?: string; updatedAt?: string }
+) {
+  const existing = await getXConnectionByDeploymentId(input.deploymentId);
+  const createdAt = existing?.createdAt ?? input.createdAt ?? nowIso();
+  const updatedAt = input.updatedAt ?? nowIso();
+
+  const payload: XConnectionRecord = {
+    deploymentId: input.deploymentId,
+    userId: input.userId,
+    xUserId: input.xUserId,
+    username: input.username,
+    name: input.name ?? null,
+    encryptedAccessToken: input.encryptedAccessToken,
+    encryptedRefreshToken: input.encryptedRefreshToken ?? null,
+    tokenType: input.tokenType,
+    scope: input.scope,
+    expiresAt: input.expiresAt ?? null,
+    createdAt,
+    updatedAt
+  };
+
+  await xConnectionsCol.doc(input.deploymentId).set(stripUndefined(payload), { merge: true });
+  return payload;
+}
+
+export async function getXConnectionByDeploymentId(deploymentId: string): Promise<XConnectionRecord | null> {
+  const doc = await xConnectionsCol.doc(deploymentId).get();
+  if (!doc.exists) return null;
+  return doc.data() as XConnectionRecord;
+}
+
+export async function updateXConnectionTokens(
+  deploymentId: string,
+  input: Pick<XConnectionRecord, "encryptedAccessToken" | "tokenType"> & {
+    encryptedRefreshToken?: string | null;
+    expiresAt?: string | null;
+    scope?: string[];
+  }
+) {
+  const existing = await getXConnectionByDeploymentId(deploymentId);
+  if (!existing) {
+    throw new Error("X connection not found");
+  }
+  const updated: XConnectionRecord = {
+    ...existing,
+    encryptedAccessToken: input.encryptedAccessToken,
+    encryptedRefreshToken:
+      input.encryptedRefreshToken !== undefined
+        ? input.encryptedRefreshToken
+        : existing.encryptedRefreshToken,
+    tokenType: input.tokenType,
+    expiresAt: input.expiresAt !== undefined ? input.expiresAt : existing.expiresAt,
+    scope: input.scope ?? existing.scope,
+    updatedAt: nowIso()
+  };
+  await xConnectionsCol.doc(deploymentId).set(stripUndefined(updated), { merge: true });
+  return updated;
+}
+
+export async function saveXOAuthState(
+  input: Omit<XOAuthStateRecord, "createdAt"> & { createdAt?: string }
+) {
+  const payload: XOAuthStateRecord = {
+    ...input,
+    createdAt: input.createdAt ?? nowIso()
+  };
+  await xOAuthStatesCol.doc(payload.state).set(stripUndefined(payload));
+  return payload;
+}
+
+export async function consumeXOAuthState(stateId: string): Promise<XOAuthStateRecord | null> {
+  const ref = xOAuthStatesCol.doc(stateId);
+  const doc = await ref.get();
+  if (!doc.exists) return null;
+  const data = doc.data() as XOAuthStateRecord;
+  await ref.delete();
+  return data;
 }
 
 export async function appendChatMessage(input: Omit<ChatMessageRecord, "id" | "createdAt">) {

@@ -31,7 +31,14 @@ The heartbeat runs every 30 minutes. Create a checklist of tasks the AI should p
 
 IMPORTANT: Keep the HEARTBEAT.md file SMALL and FOCUSED. Each task should be a single line actionable item. Do NOT create lengthy descriptions. The heartbeat runs every 30 minutes, so tasks should be quick and practical.
 
-Format as a markdown checklist with short, actionable items. Maximum 8-10 tasks total.`;
+Format as a markdown checklist with short, actionable items. Maximum 8-10 tasks total.
+
+Include concrete tasks for:
+- Reading mentions from: GET {PLATFORM_INTERNAL_API_BASE_URL}/api/internal/x/mentions?deploymentId={PLATFORM_DEPLOYMENT_ID}
+- Posting from: POST {PLATFORM_INTERNAL_API_BASE_URL}/api/internal/x/post
+- Replying from: POST {PLATFORM_INTERNAL_API_BASE_URL}/api/internal/x/reply
+- Using auth header: Authorization: Bearer {PLATFORM_INTERNAL_API_TOKEN}
+- Reply safety: only relevant mentions, avoid duplicate replies, and keep respectful tone.`;
 
 async function callAI(prompt: string): Promise<string> {
   const apiKey = env.PLATFORM_OPENROUTER_API_KEY;
@@ -106,8 +113,9 @@ export function getDefaultHeartbeat(): string {
   return `# Heartbeat Checklist
 
 - Quick scan: check for any urgent messages or mentions
-- If daytime, consider posting engaging content
-- Review any new comments and respond if needed
+- Fetch mentions via GET \${PLATFORM_INTERNAL_API_BASE_URL}/api/internal/x/mentions?deploymentId=\${PLATFORM_DEPLOYMENT_ID}
+- If daytime, post one engaging update via POST \${PLATFORM_INTERNAL_API_BASE_URL}/api/internal/x/post
+- Reply only to relevant mentions via POST \${PLATFORM_INTERNAL_API_BASE_URL}/api/internal/x/reply
 - Check if scheduled content needs to be posted
 - Report HEARTBEAT_OK if no urgent tasks`;
 }

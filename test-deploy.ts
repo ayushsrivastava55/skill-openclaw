@@ -14,10 +14,10 @@ const testBrand = {
 const testConfig = {
   userId: 'test-user-123',
   deploymentId: 'deploy-test-012',
-  model: 'openrouter/aurora-alpha',
+  model: 'openrouter/openai/gpt-5.2' as const,
   channel: 'telegram' as const,
-  channelToken: '8482089424:AAE0j3hbBTAr1FCWIAaOfeuRSAoONZa1V_U',
-  modelApiKey: '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'
+  channelToken: 'TELEGRAM_TOKEN_HERE',
+  modelApiKey: 'OPENROUTER_KEY_HERE'
 };
 
 async function main() {

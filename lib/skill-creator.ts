@@ -13,6 +13,7 @@ Generate a comprehensive SKILL.md file following the OpenClaw AgentSkills format
 5. Hashtags and keywords
 6. What to do and what to avoid
 7. Example content
+8. X automation playbook using internal APIs for posting and replies
 
 Make it highly specific to the brand - include actual brand details, products, values, and target audience.`;
 
@@ -37,6 +38,12 @@ Generate a complete SKILL.md file with:
 - Hashtags and keywords to use
 - Example posts (2-3 examples)
 - Any special considerations
+- A section named "X Automation APIs" with exact request examples for:
+  - POST {PLATFORM_INTERNAL_API_BASE_URL}/api/internal/x/post
+  - GET {PLATFORM_INTERNAL_API_BASE_URL}/api/internal/x/mentions?deploymentId={PLATFORM_DEPLOYMENT_ID}
+  - POST {PLATFORM_INTERNAL_API_BASE_URL}/api/internal/x/reply
+- Mention required auth header: Authorization: Bearer {PLATFORM_INTERNAL_API_TOKEN}
+- Mention required deployment id variable: {PLATFORM_DEPLOYMENT_ID}
 
 The skill name should be in kebab-case (e.g., "acme-corp-marketing").`;
 
@@ -170,5 +177,32 @@ description: Generic marketing skill for content creation
 "Big news! We're excited to announce our latest feature that will transform how you work..."
 
 ### Example Post 3
-"Meet Sarah, one of our amazing customers! Here's how she's using our product to achieve her goals..."`;
+"Meet Sarah, one of our amazing customers! Here's how she's using our product to achieve her goals..."
+
+## X Automation APIs
+- Env vars expected inside runtime:
+  - PLATFORM_INTERNAL_API_BASE_URL
+  - PLATFORM_INTERNAL_API_TOKEN
+  - PLATFORM_DEPLOYMENT_ID
+- Auth header for every request:
+  - Authorization: Bearer \${PLATFORM_INTERNAL_API_TOKEN}
+
+### Publish post
+- Endpoint: POST \${PLATFORM_INTERNAL_API_BASE_URL}/api/internal/x/post
+- Body:
+  {"deploymentId":"\${PLATFORM_DEPLOYMENT_ID}","text":"<final post text>"}
+
+### Read mentions
+- Endpoint: GET \${PLATFORM_INTERNAL_API_BASE_URL}/api/internal/x/mentions?deploymentId=\${PLATFORM_DEPLOYMENT_ID}
+
+### Reply to mention
+- Endpoint: POST \${PLATFORM_INTERNAL_API_BASE_URL}/api/internal/x/reply
+- Body:
+  {"deploymentId":"\${PLATFORM_DEPLOYMENT_ID}","inReplyToTweetId":"<tweet_id>","text":"<reply text>"}
+
+## Reply-guy constraints
+- Only reply when mention is relevant to brand/product.
+- Avoid repetitive replies and avoid posting duplicate content.
+- Keep replies concise, useful, and non-spammy.
+- Max 1 reply per user per thread unless the user asks a follow-up question explicitly.`;
 }

@@ -19,6 +19,6 @@ CONTROLLER_TOKEN=replace-me npm run runtime-controller
 ## Endpoint
 
 - `POST /deploy` with bearer auth.
-- Payload fields used: `deploymentId`, `model`, `modelApiKey`, `channel`, `channelPrimaryToken`, `channelSecondaryToken` (slack only), `runtimeImage`, `callbackUrl`, `callbackToken`.
+- Payload fields used: `deploymentId`, `model`, `modelApiKey`, `channel`, `channelPrimaryToken`, `channelSecondaryToken` (slack only), `runtimeImage`, `callbackUrl`, `callbackToken`, `internalApiBaseUrl`, `internalApiToken`.
 
 The controller starts a Docker container and the container reports status callbacks to the app via `/api/internal/runtime-status`.

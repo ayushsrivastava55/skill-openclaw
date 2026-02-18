@@ -18,6 +18,8 @@ export type RuntimeDispatchInput = {
     heartbeatContent: string;
     heartbeatFileName: string;
   };
+  internalApiBaseUrl?: string;
+  internalApiToken?: string;
 };
 
 export type RuntimeDispatchResult =
@@ -62,7 +64,9 @@ export async function dispatchRuntimeDeployment(
       dmPolicy: "pairing",
       gatewayToken: makeGatewayToken(input),
       callbackUrl: getCallbackUrl(),
-      callbackToken: env.RUNTIME_CALLBACK_TOKEN
+      callbackToken: env.RUNTIME_CALLBACK_TOKEN,
+      internalApiBaseUrl: env.NEXT_PUBLIC_APP_URL,
+      internalApiToken: env.INTERNAL_BOT_TOKEN?.trim() || env.RUNTIME_CALLBACK_TOKEN
     })
   });
 

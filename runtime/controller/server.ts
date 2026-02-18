@@ -16,6 +16,8 @@ type DeployPayload = {
   runtimeImage?: string;
   callbackUrl?: string;
   callbackToken?: string;
+  internalApiBaseUrl?: string;
+  internalApiToken?: string;
   brandConfig?: {
     skillContent: string;
     skillFileName: string;
@@ -237,6 +239,12 @@ async function handleDeploy(payload: DeployPayload) {
     `RUNTIME_CALLBACK_URL=${payload.callbackUrl ?? ""}`,
     "-e",
     `RUNTIME_CALLBACK_TOKEN=${payload.callbackToken ?? ""}`,
+    "-e",
+    `PLATFORM_INTERNAL_API_BASE_URL=${payload.internalApiBaseUrl ?? ""}`,
+    "-e",
+    `PLATFORM_INTERNAL_API_TOKEN=${payload.internalApiToken ?? ""}`,
+    "-e",
+    `PLATFORM_DEPLOYMENT_ID=${payload.deploymentId}`,
     "-e",
     `OPENCLAW_GATEWAY_TOKEN=${gatewayToken}`,
   ];

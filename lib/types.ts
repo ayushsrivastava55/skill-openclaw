@@ -131,6 +131,31 @@ export interface CheckUserResponse {
   subscription_status?: string | null;
 }
 
+export interface XConnectionRecord {
+  deploymentId: string;
+  userId: string;
+  xUserId: string;
+  username: string;
+  name?: string | null;
+  encryptedAccessToken: string;
+  encryptedRefreshToken: string | null;
+  tokenType: string;
+  scope: string[];
+  expiresAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface XOAuthStateRecord {
+  state: string;
+  deploymentId: string;
+  userId: string;
+  codeVerifier: string;
+  redirectUri: string;
+  createdAt: string;
+  expiresAt: string;
+}
+
 export type ChatRole = "user" | "assistant";
 
 export interface ChatMessageRecord {
