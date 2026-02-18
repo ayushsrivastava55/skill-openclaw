@@ -89,7 +89,7 @@ function makeSyntheticEmail(brandName: string) {
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-|-$/g, "")
     .slice(0, 48);
-  return `brand-${slug || "deploy"}-${Date.now()}@local.quickclaw`;
+  return `brand-${slug || "deploy"}-${Date.now()}@local.internal`;
 }
 
 async function getOrCreateDeployment(params: {

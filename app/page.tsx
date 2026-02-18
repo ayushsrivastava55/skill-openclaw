@@ -88,7 +88,7 @@ function parseCsv(raw: string): string[] {
 
 function readStoredDeploymentId() {
   if (typeof window === "undefined") return "";
-  return (window.localStorage.getItem("quickclaw_brand_deployment_id") ?? "").trim();
+  return (window.localStorage.getItem("brand_deployment_id") ?? "").trim();
 }
 
 export default function HomePage() {
@@ -128,9 +128,9 @@ export default function HomePage() {
     }
   }, []);
 
-  useEffect(() => {
+  useEffect(() {
     if (!deploymentId || typeof window === "undefined") return;
-    window.localStorage.setItem("quickclaw_brand_deployment_id", deploymentId);
+    window.localStorage.setItem("brand_deployment_id", deploymentId);
   }, [deploymentId]);
 
   useEffect(() => {
