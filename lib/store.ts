@@ -13,7 +13,8 @@ import type {
   UserRecord,
   WarmSlot,
   XConnectionRecord,
-  XOAuthStateRecord
+  XOAuthStateRecord,
+  XUserConnectionRecord
 } from "@/lib/types";
 
 type CheckoutSession = { deploymentId: string; type: "deploy" | "credits"; amount?: number };
@@ -67,6 +68,7 @@ const processedGumroadCol = db.collection("processedGumroadSales");
 const processedDodoCol = db.collection("processedDodoEvents");
 const openrouterKeysCol = db.collection("openrouterKeys");
 const xConnectionsCol = db.collection("xConnections");
+const xUserConnectionsCol = db.collection("xUserConnections");
 const xOAuthStatesCol = db.collection("xOAuthStates");
 
 function normalizeEmail(email: string) {
@@ -612,6 +614,67 @@ export async function updateXConnectionTokens(
     updatedAt: nowIso()
   };
   await xConnectionsCol.doc(deploymentId).set(stripUndefined(updated), { merge: true });
+  return updated;
+}
+
+export async function saveXUserConnection(
+  input: Omit<XUserConnectionRecord, "createdAt" | "updatedAt"> & { createdAt?: string; updatedAt?: string }
+) {
+  const existing = await getXUserConnectionByUserId(input.userId);
+  const createdAt = existing?.createdAt ?? input.createdAt ?? nowIso();
+  const updatedAt = input.updatedAt ?? nowIso();
+
+  const payload: XUserConnectionRecord = {
+    userId: input.userId,
+    xUserId: input.xUserId,
+    username: input.username,
+    name: input.name ?? null,
+    encryptedAccessToken: input.encryptedAccessToken,
+    encryptedRefreshToken: input.encryptedRefreshToken ?? null,
+    tokenType: input.tokenType,
+    scope: input.scope,
+    expiresAt: input.expiresAt ?? null,
+    createdAt,
+    updatedAt
+  };
+
+  await xUserConnectionsCol.doc(input.userId).set(stripUndefined(payload), { merge: true });
+  return payload;
+}
+
+export async function getXUserConnectionByUserId(userId: string): Promise<XUserConnectionRecord | null> {
+  const doc = await xUserConnectionsCol.doc(userId).get();
+  if (!doc.exists) return null;
+  return doc.data() as XUserConnectionRecord;
+}
+
+export async function updateXUserConnectionTokens(
+  userId: string,
+  input: Pick<XUserConnectionRecord, "encryptedAccessToken" | "tokenType"> & {
+    encryptedRefreshToken?: string | null;
+    expiresAt?: string | null;
+    scope?: string[];
+  }
+) {
+  const existing = await getXUserConnectionByUserId(userId);
+  if (!existing) {
+    throw new Error("User-level X connection not found");
+  }
+
+  const updated: XUserConnectionRecord = {
+    ...existing,
+    encryptedAccessToken: input.encryptedAccessToken,
+    encryptedRefreshToken:
+      input.encryptedRefreshToken !== undefined
+        ? input.encryptedRefreshToken
+        : existing.encryptedRefreshToken,
+    tokenType: input.tokenType,
+    expiresAt: input.expiresAt !== undefined ? input.expiresAt : existing.expiresAt,
+    scope: input.scope ?? existing.scope,
+    updatedAt: nowIso()
+  };
+
+  await xUserConnectionsCol.doc(userId).set(stripUndefined(updated), { merge: true });
   return updated;
 }
 

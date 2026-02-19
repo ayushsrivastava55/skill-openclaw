@@ -59,9 +59,10 @@ Current implementation ships an in-memory control plane for local development. I
 
 ## X Automation flow
 
-1. Frontend calls `POST /api/x/connect` with a `deploymentId` (Firebase auth bearer token required).
+1. Frontend calls `POST /api/x/connect` (Firebase auth bearer token required). `deploymentId` is optional.
 2. Redirect user to returned `authorizeUrl`.
-3. `GET /api/x/callback` exchanges code for user token and stores encrypted tokens in Firestore.
-4. OpenClaw runtime calls internal endpoints (`/api/internal/x/*`) with bearer token:
+3. `GET /api/x/callback` exchanges code for user token and stores encrypted tokens in Firestore at user level.
+4. On deploy, if no deployment-scoped X connection exists, the user-level X connection is auto-attached.
+5. OpenClaw runtime calls internal endpoints (`/api/internal/x/*`) with bearer token:
    - `Authorization: Bearer ${INTERNAL_BOT_TOKEN || RUNTIME_CALLBACK_TOKEN}`
    - Include `deploymentId` so actions are scoped to that deployment's connected X account.

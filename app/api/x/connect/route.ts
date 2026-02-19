@@ -1,11 +1,11 @@
 import { z } from "zod";
 import { NextResponse } from "next/server";
 import { getAuthenticatedUser } from "@/lib/auth-server";
-import { getDeploymentById, getUserById, saveXOAuthState } from "@/lib/store";
+import { getDeploymentById, getUserByEmail, getUserById, saveXOAuthState, upsertUser } from "@/lib/store";
 import { buildXAuthorizeUrl, getXRedirectUri, makeOAuthState, makePkceChallenge, makePkceVerifier } from "@/lib/x-api";
 
 const schema = z.object({
-  deploymentId: z.string().min(1)
+  deploymentId: z.string().min(1).optional()
 });
 
 export async function POST(request: Request) {
@@ -19,14 +19,26 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
   }
 
-  const deployment = await getDeploymentById(parsed.data.deploymentId);
-  if (!deployment) {
-    return NextResponse.json({ error: "Deployment not found" }, { status: 404 });
+  let owner = await getUserByEmail(authUser.email);
+  if (!owner) {
+    owner = await upsertUser({
+      email: authUser.email,
+      name: authUser.email.split("@")[0] || "User",
+      photoURL: null
+    });
   }
 
-  const owner = await getUserById(deployment.userId);
-  if (!owner || owner.email.toLowerCase().trim() !== authUser.email) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  const deploymentId = parsed.data.deploymentId?.trim();
+  if (deploymentId) {
+    const deployment = await getDeploymentById(deploymentId);
+    if (!deployment) {
+      return NextResponse.json({ error: "Deployment not found" }, { status: 404 });
+    }
+
+    const deploymentOwner = await getUserById(deployment.userId);
+    if (!deploymentOwner || deploymentOwner.email.toLowerCase().trim() !== authUser.email) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
   }
 
   try {
@@ -38,7 +50,7 @@ export async function POST(request: Request) {
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
     await saveXOAuthState({
       state,
-      deploymentId: deployment.id,
+      deploymentId: deploymentId ?? null,
       userId: owner.id,
       codeVerifier,
       redirectUri,

@@ -269,10 +269,6 @@ export default function HomePage() {
 
   const handleConnectX = async () => {
     const targetDeploymentId = (deploymentId || redeployId).trim();
-    if (!targetDeploymentId) {
-      toast.error("Deploy first (or provide redeploy ID) before connecting X.");
-      return;
-    }
 
     setIsConnectingX(true);
     try {
@@ -287,9 +283,7 @@ export default function HomePage() {
           "Content-Type": "application/json",
           Authorization: `Bearer ${idToken}`
         },
-        body: JSON.stringify({
-          deploymentId: targetDeploymentId
-        })
+        body: JSON.stringify(targetDeploymentId ? { deploymentId: targetDeploymentId } : {})
       });
 
       const payload = (await response.json().catch(() => ({}))) as {

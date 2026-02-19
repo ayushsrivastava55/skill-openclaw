@@ -126,6 +126,7 @@ async function main() {
     "processedDodoEvents",
     "openrouterKeys",
     "xConnections",
+    "xUserConnections",
     "xOAuthStates",
     "config"
   ];

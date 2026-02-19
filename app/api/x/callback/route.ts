@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { consumeXOAuthState, getDeploymentById, saveXConnection } from "@/lib/store";
+import { consumeXOAuthState, getDeploymentById, saveXConnection, saveXUserConnection } from "@/lib/store";
 import { encrypt } from "@/lib/security";
 import { exchangeCodeForTokens, getXMe } from "@/lib/x-api";
 import { computeExpiresAt } from "@/lib/x-service";
@@ -38,15 +38,17 @@ export async function GET(request: Request) {
   if (!pending) {
     return redirectWithStatus("error", "OAuth state expired or invalid");
   }
+  const pendingDeploymentId = pending.deploymentId?.trim() || "";
 
   const expiresMs = Date.parse(pending.expiresAt);
   if (!Number.isFinite(expiresMs) || Date.now() > expiresMs) {
-    return redirectWithStatus("error", "OAuth state expired", pending.deploymentId);
+    return redirectWithStatus("error", "OAuth state expired", pendingDeploymentId || undefined);
   }
-
-  const deployment = await getDeploymentById(pending.deploymentId);
-  if (!deployment || deployment.userId !== pending.userId) {
-    return redirectWithStatus("error", "Deployment no longer available", pending.deploymentId);
+  if (pendingDeploymentId) {
+    const deployment = await getDeploymentById(pendingDeploymentId);
+    if (!deployment || deployment.userId !== pending.userId) {
+      return redirectWithStatus("error", "Deployment no longer available", pendingDeploymentId);
+    }
   }
 
   try {
@@ -57,26 +59,44 @@ export async function GET(request: Request) {
     });
 
     const me = await getXMe(tokens.access_token);
+    const encryptedAccessToken = encrypt(tokens.access_token);
+    const encryptedRefreshToken = tokens.refresh_token ? encrypt(tokens.refresh_token) : null;
+    const scope = (tokens.scope ?? "").split(/\s+/).map((item) => item.trim()).filter(Boolean);
+    const expiresAt = computeExpiresAt(tokens.expires_in);
 
-    await saveXConnection({
-      deploymentId: pending.deploymentId,
+    await saveXUserConnection({
       userId: pending.userId,
       xUserId: me.id,
       username: me.username,
       name: me.name ?? null,
-      encryptedAccessToken: encrypt(tokens.access_token),
-      encryptedRefreshToken: tokens.refresh_token ? encrypt(tokens.refresh_token) : null,
+      encryptedAccessToken,
+      encryptedRefreshToken,
       tokenType: tokens.token_type || "bearer",
-      scope: (tokens.scope ?? "").split(/\s+/).map((item) => item.trim()).filter(Boolean),
-      expiresAt: computeExpiresAt(tokens.expires_in)
+      scope,
+      expiresAt
     });
 
-    return redirectWithStatus("success", "X account connected", pending.deploymentId, me.username);
+    if (pendingDeploymentId) {
+      await saveXConnection({
+        deploymentId: pendingDeploymentId,
+        userId: pending.userId,
+        xUserId: me.id,
+        username: me.username,
+        name: me.name ?? null,
+        encryptedAccessToken,
+        encryptedRefreshToken,
+        tokenType: tokens.token_type || "bearer",
+        scope,
+        expiresAt
+      });
+    }
+
+    return redirectWithStatus("success", "X account connected", pendingDeploymentId || undefined, me.username);
   } catch (err) {
     return redirectWithStatus(
       "error",
       err instanceof Error ? err.message : "Failed to complete X OAuth",
-      pending.deploymentId
+      pendingDeploymentId || undefined
     );
   }
 }

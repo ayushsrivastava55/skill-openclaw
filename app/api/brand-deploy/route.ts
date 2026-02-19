@@ -6,6 +6,9 @@ import { dispatchRuntimeDeployment } from "@/lib/runtime-executor";
 import {
   createDeployment,
   getDeploymentById,
+  getXConnectionByDeploymentId,
+  getXUserConnectionByUserId,
+  saveXConnection,
   updateDeploymentById,
   updateDeploymentStatus,
   upsertUser
@@ -190,6 +193,26 @@ export async function POST(request: NextRequest) {
       modelApiKey,
       brandName: brand.name
     });
+
+    // If user connected X before deployment, attach it so this deployment has an explicit snapshot.
+    const existingX = await getXConnectionByDeploymentId(deployment.id);
+    if (!existingX) {
+      const userX = await getXUserConnectionByUserId(deployment.userId);
+      if (userX) {
+        await saveXConnection({
+          deploymentId: deployment.id,
+          userId: deployment.userId,
+          xUserId: userX.xUserId,
+          username: userX.username,
+          name: userX.name ?? null,
+          encryptedAccessToken: userX.encryptedAccessToken,
+          encryptedRefreshToken: userX.encryptedRefreshToken,
+          tokenType: userX.tokenType,
+          scope: userX.scope,
+          expiresAt: userX.expiresAt
+        });
+      }
+    }
 
     await updateDeploymentStatus(
       deployment.id,

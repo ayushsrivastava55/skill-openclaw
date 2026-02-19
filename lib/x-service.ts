@@ -1,6 +1,13 @@
 import { encrypt, decrypt } from "@/lib/security";
 import { refreshXAccessToken } from "@/lib/x-api";
-import { getXConnectionByDeploymentId, updateXConnectionTokens } from "@/lib/store";
+import {
+  getDeploymentById,
+  getXConnectionByDeploymentId,
+  getXUserConnectionByUserId,
+  updateXConnectionTokens,
+  updateXUserConnectionTokens
+} from "@/lib/store";
+import type { XConnectionRecord, XUserConnectionRecord } from "@/lib/types";
 
 const REFRESH_SKEW_MS = 120_000;
 
@@ -19,7 +26,16 @@ function computeExpiresAt(expiresIn?: number) {
 }
 
 export async function getValidXAccessTokenForDeployment(deploymentId: string) {
-  const connection = await getXConnectionByDeploymentId(deploymentId);
+  const deployment = await getDeploymentById(deploymentId);
+  if (!deployment) {
+    throw new Error("Deployment not found");
+  }
+
+  const deploymentConnection = await getXConnectionByDeploymentId(deploymentId);
+  const userConnection = deploymentConnection
+    ? null
+    : await getXUserConnectionByUserId(deployment.userId);
+  const connection = deploymentConnection ?? userConnection;
   if (!connection) {
     throw new Error("X account is not connected for this deployment");
   }
@@ -44,13 +60,20 @@ export async function getValidXAccessTokenForDeployment(deploymentId: string) {
     ? refreshed.scope.split(/\s+/).map((item) => item.trim()).filter(Boolean)
     : connection.scope;
 
-  const updated = await updateXConnectionTokens(deploymentId, {
+  const tokenUpdate = {
     encryptedAccessToken: encrypt(nextAccessToken),
     encryptedRefreshToken: encrypt(nextRefreshToken),
     tokenType: refreshed.token_type || connection.tokenType,
     scope: nextScopes,
     expiresAt: computeExpiresAt(refreshed.expires_in)
-  });
+  };
+
+  let updated: XConnectionRecord | XUserConnectionRecord;
+  if (deploymentConnection) {
+    updated = await updateXConnectionTokens(deploymentId, tokenUpdate);
+  } else {
+    updated = await updateXUserConnectionTokens(deployment.userId, tokenUpdate);
+  }
 
   return {
     connection: updated,

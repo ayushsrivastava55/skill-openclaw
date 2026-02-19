@@ -148,12 +148,26 @@ export interface XConnectionRecord {
 
 export interface XOAuthStateRecord {
   state: string;
-  deploymentId: string;
+  deploymentId?: string | null;
   userId: string;
   codeVerifier: string;
   redirectUri: string;
   createdAt: string;
   expiresAt: string;
+}
+
+export interface XUserConnectionRecord {
+  userId: string;
+  xUserId: string;
+  username: string;
+  name?: string | null;
+  encryptedAccessToken: string;
+  encryptedRefreshToken: string | null;
+  tokenType: string;
+  scope: string[];
+  expiresAt: string | null;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export type ChatRole = "user" | "assistant";
